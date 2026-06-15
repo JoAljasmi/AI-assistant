@@ -1,65 +1,88 @@
-"""Entry point for the test-writer agent.
+"""Entry point for the personal assistant.
 
-Run with:
-    python main.py
+Run with:  python main.py
 
-Optional env flags:
-    REQUIRE_APPROVAL=1   prompt y/n before every bash command (slows demos but
-                         shows the safety gate; off by default because it
-                         doesn't compose with parallel workers).
+Three things run at once:
+  - the MAIN thread just waits for shutdown,
+  - a CONSOLE thread owns stdin and routes each line: an approval answer, a
+    budget command, or (default) a message for the assistant,
+  - an AGENT thread pulls messages off a queue and runs one conversation turn
+    for each.
+
+Why the agent runs on its OWN thread: stdin can only be read safely by one
+thread (your console thread). If the agent ran on that same thread, then while
+it was busy running a turn it couldn't read your y/n approval — and since the
+turn is *blocked waiting* for that approval, you'd deadlock. Putting the turn
+on a separate thread keeps the console thread free to feed it the answer.
+
+(You could instead go single-threaded and have approvals read stdin directly,
+but that means editing approval.py's synchronization. This way your approval
+machinery stays untouched — the console thread still owns stdin exactly as it
+did before; it just learned one new trick: unrecognized lines are chat.)
 """
-import sys
+import queue
 import threading
 
-from agent import run_agent
+from agent import Conversation
 from budget import Budget
 from config import MAX_TOKENS_DEFAULT, MAX_REQUESTS_PER_MINUTE_DEFAULT
 from console_control import run_console
 
 
+def agent_loop(convo, chat_queue, stop_event):
+    """Pull user messages off the queue and run one conversation turn each."""
+    while not stop_event.is_set():
+        message = chat_queue.get()      # blocks until a message (or sentinel) arrives
+        if message is None:             # sentinel from the console thread = shut down
+            return
+        try:
+            convo.run_turn(message, deliver=lambda text: print(f"\nassistant> {text}\n"))
+        except RuntimeError as e:
+            # Budget hard cap or rate limit tripped midturn. Report it and keep
+            print(f"\n[main] turn halted: {e}")
+            print(f"[main] budget: {convo.budget.snapshot()}")
+
+
 def main():
-    # Global budget shared across the main agent and any sub-agents it spawns.
     budget = Budget(
         max_tokens=MAX_TOKENS_DEFAULT,
         max_requests_per_minute=MAX_REQUESTS_PER_MINUTE_DEFAULT,
     )
     print(f"[main] budget: {budget.snapshot()}")
 
-    # Get the user's task BEFORE starting the console thread — otherwise the
-    # console thread would steal the input() call.
-    try:
-        goal = input("\nWhat should the agent do?\n> ").strip()
-    except (EOFError, KeyboardInterrupt):
-        print("\n[main] no task given, exiting")
-        return
-    if not goal:
-        print("[main] empty task, exiting")
-        return
-
-    # Now start the console thread for live budget tuning during the run.
+    convo = Conversation(budget=budget)
+    chat_queue = queue.Queue()
     stop_event = threading.Event()
+
+    #runs conversation turns off the queue.
+    agent_thread = threading.Thread(
+        target=agent_loop,
+        args=(convo, chat_queue, stop_event),
+        daemon=True,
+    )
+    agent_thread.start()
+
+    # routes lines (approvals / commands / chat).
     console_thread = threading.Thread(
         target=run_console,
-        args=(budget, stop_event),
+        args=(budget, stop_event, chat_queue),
         daemon=True,
     )
     console_thread.start()
 
-    print("\n=== AGENT RUNNING ===\n")
+    print("\n=== ASSISTANT READY ===")
+    print("Type a message and press enter. 'help' for commands, 'quit' to exit.\n")
 
     try:
-        run_agent(goal, deliver=print, budget=budget)
-    except RuntimeError as e:
-        # The budget raises RuntimeError when the hard cap or rate limit hits.
-        # That's the intended VG.3 stop behavior — show it cleanly.
-        print(f"\n[main] agent halted: {e}")
-        print(f"[main] final budget: {budget.snapshot()}")
+        # Main thread idles until something sets the stop event.
+        while not stop_event.is_set():
+            stop_event.wait(timeout=0.5)
     except KeyboardInterrupt:
-        print("\n[main] interrupted by user")
-    else:
-        print(f"\n[main] final budget: {budget.snapshot()}")
+        print("\n[main] interrupted")
     finally:
         stop_event.set()
+        chat_queue.put(None)  # ensure the agent thread can wake up and exit
+        print(f"[main] final budget: {budget.snapshot()}")
 
 
 if __name__ == "__main__":
