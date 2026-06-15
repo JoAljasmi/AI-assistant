@@ -1,12 +1,3 @@
-"""ReAct loop for the test-writer agent.
-
-By default each iteration prints a single short line ("[iter N] tool -> name(args)")
-plus the tool result one-liner. Set VERBOSE=1 to also dump the raw model
-message and the raw tool result — useful for debugging, noisy for demos.
-
-The approval block in sandbox.run_bash always shows the FULL command no matter
-what VERBOSE is set to, so the y/n decision is never blind.
-"""
 import json
 import os
 
@@ -32,7 +23,6 @@ def _summarize_tool_call(tc):
 
     if name == "bash":
         cmd = args.get("command", "")
-        # First line only, truncated. The approval block shows the rest.
         first_line = cmd.splitlines()[0] if cmd else ""
         if len(first_line) > 90:
             first_line = first_line[:87] + "..."
@@ -42,9 +32,6 @@ def _summarize_tool_call(tc):
         old_len = len(args.get("old_text", ""))
         new_len = len(args.get("new_text", ""))
         return f"edit_file -> {path}  (replace {old_len} -> {new_len} chars)"
-    if name == "spawn_workers":
-        tasks = args.get("tasks", [])
-        return f"spawn_workers -> {len(tasks)} parallel tasks"
     return f"{name}(...)"
 
 
@@ -52,7 +39,6 @@ def _summarize_tool_result(name, result):
     """One-line preview of a tool result. Truncates noisy stdout."""
     if not isinstance(result, str):
         return f"{name} -> <non-string result>"
-    # Compress whitespace, take first ~120 chars.
     one_line = " ".join(result.split())
     if len(one_line) > 120:
         one_line = one_line[:117] + "..."
@@ -83,102 +69,120 @@ def execute_tool_call(tool_call, budget=None):
             return "[error: edit_file requires path, old_text, and new_text]"
         return edit_file(path, old_text, new_text)
 
-    if name == "spawn_workers":
-        # Imported lazily to avoid a circular import: workers.py imports
-        # run_agent from this module.
-        from workers import spawn_workers
-        tasks = args.get("tasks")
-        if not tasks or not isinstance(tasks, list):
-            return "[error: spawn_workers requires a non-empty list of task strings]"
-        results = spawn_workers(tasks, budget=budget)
-        # Return a compact JSON string so the main model can read each
-        # worker's outcome and decide what to do next.
-        return json.dumps(results, ensure_ascii=False, indent=2)
-
     return f"[error: unknown tool '{name}']"
 
-def run_agent(user_goal, deliver, budget=None):
+
+class Conversation:
+    """Holds the persistent message history for one ongoing conversation.
+
+    Create one of these and call run_turn() once per incoming user message.
+    The history lives on self.messages and survives across turns that's the
+    whole point. Later, with Discord, you'll keep one Conversation per channel
+    (a dict of {channel_id: Conversation}) so each chat remembers its own
+    thread.
     """
-    Run a ReAct turn. Calls deliver(text) once when the model produces a final
-    user-facing reply. Does not call deliver for internal/harness states.
-    Returns None.
-    """
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_goal},
-    ]
-    session_path = start_session(user_goal)
-    print(f"[agent] session log: {session_path}")
 
-    for iteration in range(MAX_ITERATIONS):
-        # Context engineering: if messages has grown past the threshold,
-        # summarize the older middle so we don't blow the context window.
-        # No-op when the conversation is still short.
-        messages, did_compact, info = maybe_compact(messages, budget=budget)
-        if did_compact:
-            print(f"[compact] {info}")
+    def __init__(self, budget=None):
+        # Seed with just the system prompt.
+        self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        self.budget = budget
+        # ONE session log for the whole conversation
+        self.session_path = start_session()
+        print(f"[agent] session log: {self.session_path}")
 
-        assistant_msg = chat(messages, tools=TOOLS, budget=budget)
+    def run_turn(self, user_message, deliver):
+        """Handle one user message.
 
-        if VERBOSE:
-            print(f"\n--- iteration {iteration} ---")
-            print("MODEL:", assistant_msg)
+        Appends the message, runs the tool loop until the model returns a
+        final text reply (no tool calls), delivers that reply via deliver(),
+        and returns it. The history is left intact for the next turn.
+        """
+        self.messages.append({"role": "user", "content": user_message})
 
-        messages.append(assistant_msg)
+        for iteration in range(MAX_ITERATIONS):
+            # Compact the messages if they have grown past the threshold
+            self.messages, did_compact, info = maybe_compact(
+                self.messages, budget=self.budget
+            )
+            if did_compact:
+                print(f"[compact] {info}")
 
-        tool_calls = assistant_msg.get("tool_calls")
-        if not tool_calls:
-            save_session(session_path, messages)
-            content = assistant_msg.get("content") or ""
-            content = content.strip()
-            if content:
-                deliver(content)
-            return content
-
-        for tool_call in tool_calls:
-            # One-liner showing what the model decided. The approval block
-            # in run_bash will print the full command if it needs y/n.
-            print(f"[iter {iteration}] {_summarize_tool_call(tool_call)}")
-
-            result = execute_tool_call(tool_call, budget=budget)
-            tool_name = tool_call['function']['name']
+            assistant_msg = chat(self.messages, tools=TOOLS, budget=self.budget)
 
             if VERBOSE:
-                print(f"TOOL RESULT ({tool_name}):", result)
-            else:
-                print(f"[iter {iteration}] {_summarize_tool_result(tool_name, result)}")
+                print(f"\n--- iteration {iteration} ---")
+                print("MODEL:", assistant_msg)
 
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call["id"],
-                "content": result,
-            })
+            self.messages.append(assistant_msg)
 
-        save_session(session_path, messages)
+            tool_calls = assistant_msg.get("tool_calls")
+            if not tool_calls:
+                # No tools requested -> this is the user-facing reply. Turn done.
+                save_session(self.session_path, self.messages)
+                content = (assistant_msg.get("content") or "").strip()
+                if content:
+                    deliver(content)
+                return content
 
-    save_session(session_path, messages)
-    print("[agent] max iterations reached, no reply delivered")
+            for tool_call in tool_calls:
+                print(f"[iter {iteration}] {_summarize_tool_call(tool_call)}")
 
-    messages.append({
-        "role": "user",
-        "content": (
-            "You've hit the iteration limit. Stop calling tools. "
-            "In ONE short chat message, summarize what you did, what works, "
-            "and what (if anything) is unfinished. Reply with text only — no tool calls."
-        ),
-    })
-    final = chat(messages, tools=None, budget=budget)
-    content = (final.get("content") or "").strip()
-    if content:
+                result = execute_tool_call(tool_call, budget=self.budget)
+                tool_name = tool_call["function"]["name"]
+
+                if VERBOSE:
+                    print(f"TOOL RESULT ({tool_name}):", result)
+                else:
+                    print(f"[iter {iteration}] {_summarize_tool_result(tool_name, result)}")
+
+                self.messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call["id"],
+                    "content": result,
+                })
+
+            save_session(self.session_path, self.messages)
+
+        # Hit the per-TURN iteration cap without a text reply. Force one short
+        # reply for this turn, but keep the conversation alive for the next one.
+        save_session(self.session_path, self.messages)
+        print("[agent] turn hit iteration limit; forcing a summary reply")
+        self.messages.append({
+            "role": "user",
+            "content": (
+                "You've hit the per-turn tool limit. Stop calling tools. In ONE "
+                "short message, tell me what you got done and what's left. "
+                "Reply with text only — no tool calls."
+            ),
+        })
+        final = chat(self.messages, tools=None, budget=self.budget)
+        content = (final.get("content") or "").strip()
+        self.messages.append(final)
+        save_session(self.session_path, self.messages)
+        if not content:
+            content = "[hit the tool limit without finishing that one — try narrowing it.]"
         deliver(content)
         return content
-    else:
-        fallback = "[agent] hit iteration limit without producing a summary."
-        deliver(fallback)
-        return fallback
 
 
 if __name__ == "__main__":
-    goal = input("What should the agent do? ")
-    print("\n=== AGENT REPLY ===")
-    run_agent(goal, deliver=print)
+    # Read the system prompt from the file
+    from budget import Budget
+    from config import MAX_TOKENS_DEFAULT, MAX_REQUESTS_PER_MINUTE_DEFAULT
+
+    budget = Budget(MAX_TOKENS_DEFAULT, MAX_REQUESTS_PER_MINUTE_DEFAULT)
+    convo = Conversation(budget=budget)
+
+    print("\nAssistant ready. Type a message, or 'quit' to exit.\n")
+    while True:
+        try:
+            user_message = input("you> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nbye")
+            break
+        if not user_message:
+            continue
+        if user_message.lower() in ("quit", "exit"):
+            print("bye")
+            break
+        convo.run_turn(user_message, deliver=lambda text: print(f"assistant> {text}\n"))
