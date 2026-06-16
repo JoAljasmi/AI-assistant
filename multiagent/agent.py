@@ -6,6 +6,8 @@ from sandbox import run_bash, edit_file
 from config import SYSTEM_PROMPT, MAX_ITERATIONS, TOOLS
 from sessions import start_session, save_session
 from context import maybe_compact
+from tasks import add_task, list_tasks, complete_task, delete_task
+from datetime import datetime
 
 
 VERBOSE = os.environ.get("VERBOSE", "").lower() in ("1", "true", "yes")
@@ -69,6 +71,15 @@ def execute_tool_call(tool_call, budget=None):
             return "[error: edit_file requires path, old_text, and new_text]"
         return edit_file(path, old_text, new_text)
 
+    if name == "add_task":
+        return add_task(args.get("description"), args.get("due_date"))
+    if name == "list_tasks":
+        return list_tasks(args.get("status", "pending"))
+    if name == "complete_task":
+        return complete_task(args.get("task_id"))
+    if name == "delete_task":
+        return delete_task(args.get("task_id"))
+
     return f"[error: unknown tool '{name}']"
 
 
@@ -83,6 +94,8 @@ class Conversation:
     """
 
     def __init__(self, budget=None):
+        today = datetime.now().strftime("%A, %Y-%m-%d")
+        system = SYSTEM_PROMPT + f"\n\nToday's date: {today}."
         # Seed with just the system prompt.
         self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         self.budget = budget

@@ -74,7 +74,60 @@
             "required": ["tasks"]
           }
         }
+  },
+
+  {
+    "type": "function",
+    "function": {
+      "name": "add_task",
+      "description": "Add a task or deadline to the user's list. Use whenever they want to remember to do something or mention a deadline.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "description": {"type": "string", "description": "What the task is, in a few words."},
+          "due_date": {"type": "string", "description": "Optional deadline as YYYY-MM-DD. Convert any natural-language date ('friday', 'tomorrow') to this format yourself using today's date. Omit if there's no deadline."}
+        },
+        "required": ["description"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "list_tasks",
+      "description": "List the user's tasks. Use for questions like 'what's due this week' or 'what do I need to do'. Returns each task's id, text, and due date.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "status": {"type": "string", "enum": ["pending", "done", "all"], "description": "Which tasks to show. Defaults to pending."}
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "complete_task",
+      "description": "Mark a task done by its id. If you don't know the id, call list_tasks first.",
+      "parameters": {
+        "type": "object",
+        "properties": {"task_id": {"type": "integer", "description": "The id of the task to complete."}},
+        "required": ["task_id"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "delete_task",
+      "description": "Delete a task by id. Prefer complete_task for finished work; delete only removes something added by mistake.",
+      "parameters": {
+        "type": "object",
+        "properties": {"task_id": {"type": "integer", "description": "The id of the task to delete."}},
+        "required": ["task_id"]
+      }
+    }
   }
-  
 ]
 }
