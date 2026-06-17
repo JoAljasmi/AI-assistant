@@ -31,6 +31,7 @@ from budget import Budget
 from config import MAX_TOKENS_DEFAULT, MAX_REQUESTS_PER_MINUTE_DEFAULT
 from scheduler import run_scheduler
 import approval
+from settings import get_setting
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -151,6 +152,23 @@ async def on_ready():
 
 @client.event
 async def on_message(message):
+    if message.author == client.user:
+        return
+
+    # In a server, honor mention-only mode if it's currently on (toggleable
+    # at runtime via the set_mention_mode tool). DMs always get a reply.
+    if message.guild is not None:
+        if get_setting("mention_only", True) and client.user not in message.mentions:
+            return
+
+    # Strip the bot's own mention out of the text the model sees.
+    content = message.content
+    for tag in (f"<@{client.user.id}>", f"<@!{client.user.id}>"):
+        content = content.replace(tag, "")
+    content = content.strip()
+    if not content:
+        return
+        
     global reminder_channel_id
     if message.author == client.user:
         return

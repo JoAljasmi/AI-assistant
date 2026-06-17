@@ -169,6 +169,12 @@
   { "type": "function", "function": {
         "name": "weather",
         "description": "Current weather and today's temperature range for a city or place name.",
-        "parameters": {"type": "object", "properties": {"location": {"type": "string"}}, "required": ["location"]} } }
+        "parameters": {"type": "object", "properties": {"location": {"type": "string"}}, "required": ["location"]} } 
+  },
+  { "type": "function", "function": {
+    "name": "set_mention_mode",
+    "description": "Turn mention-only mode on or off for server channels. When ON, you only reply in a server when the user @-mentions you; when OFF, you reply to every message (DMs always get a reply either way). Call this when the user asks you to only respond to @mentions, or to respond to everything.",
+    "parameters": {"type": "object", "properties": {"enabled": {"type": "boolean", "description": "true = only reply to @mentions; false = reply to everything."}}, "required": ["enabled"]} } 
+  }
 ]
 }

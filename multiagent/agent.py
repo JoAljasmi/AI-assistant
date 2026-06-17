@@ -17,7 +17,7 @@ VERBOSE=1 also dumps raw model messages and tool results for debugging.
 import json
 import os
 from datetime import datetime
-
+from settings import set_mention_mode
 from provider import chat, ModelLadder
 from sandbox import run_bash, edit_file
 from config import SYSTEM_PROMPT, MAX_ITERATIONS, TOOLS, MODEL_LADDER
@@ -117,6 +117,8 @@ def execute_tool_call(tool_call, budget=None, ladder=None):
         return read_url(args.get("url"))
     if name == "weather":
         return weather(args.get("location"))
+    if name == "set_mention_mode":
+        return set_mention_mode(args.get("enabled"))
 
     if name == "escalate":
         # The model judged this task too hard for the current model. Climb.
