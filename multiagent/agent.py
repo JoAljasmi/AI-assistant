@@ -72,7 +72,7 @@ def execute_tool_call(tool_call, budget=None):
         return edit_file(path, old_text, new_text)
 
     if name == "add_task":
-        return add_task(args.get("description"), args.get("due_date"))
+        return add_task(args.get("description"), args.get("due_date"), args.get("due_time"))
     if name == "list_tasks":
         return list_tasks(args.get("status", "pending"))
     if name == "complete_task":

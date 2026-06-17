@@ -85,7 +85,8 @@
         "type": "object",
         "properties": {
           "description": {"type": "string", "description": "What the task is, in a few words."},
-          "due_date": {"type": "string", "description": "Optional deadline as YYYY-MM-DD. Convert any natural-language date ('friday', 'tomorrow') to this format yourself using today's date. Omit if there's no deadline."}
+          "due_date": {"type": "string", "description": "Optional deadline as YYYY-MM-DD. Convert any natural-language date ('friday', 'tomorrow') to this format yourself using today's date. Omit if there's no deadline."},
+          "due_time": {"type": "string", "description": "Optional time of day as HH:MM (24-hour). Convert e.g. '7pm' to '19:00', '8:30am' to '08:30'. Omit if no specific time."}
         },
         "required": ["description"]
       }
