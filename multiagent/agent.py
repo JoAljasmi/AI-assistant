@@ -1,21 +1,39 @@
+"""Conversational agent loop for the personal assistant.
+
+A single user message becomes a "turn": the message is appended to the running
+history, the model is called, any tools it requests are run and fed back, and
+the loop repeats until the model returns a plain-text reply. The history lives
+on the Conversation object, so it survives across turns and (via sessions.py)
+across restarts.
+
+Cost control lives in the loop. Each turn starts on the cheapest model in a
+ModelLadder and climbs only when the model gets stuck — either it calls the
+`escalate` tool itself, or it errors several times in a row and the loop bumps
+it. The ladder resets every turn, so easy turns stay cheap. maybe_compact()
+trims old history so long turns don't overflow the context window.
+
+VERBOSE=1 also dumps raw model messages and tool results for debugging.
+"""
 import json
 import os
+from datetime import datetime
 
-from provider import chat
+from provider import chat, ModelLadder
 from sandbox import run_bash, edit_file
-from config import SYSTEM_PROMPT, MAX_ITERATIONS, TOOLS
+from config import SYSTEM_PROMPT, MAX_ITERATIONS, TOOLS, MODEL_LADDER
 from sessions import session_path_for, load_session, save_session
 from context import maybe_compact
 from tasks import add_task, list_tasks, complete_task, delete_task
-from datetime import datetime
 
 
 VERBOSE = os.environ.get("VERBOSE", "").lower() in ("1", "true", "yes")
 
+# Climb to the next model after this many tool errors in a row within one turn.
+ESCALATE_AFTER_ERRORS = 2
+
 
 def _summarize_tool_call(tc):
-    """One-line preview of a tool call. The approval block shows the full
-    command separately, so this just needs to give a glance-level summary."""
+    """One-line preview of a tool call for the log."""
     name = tc["function"]["name"]
     args_json = tc["function"]["arguments"]
     try:
@@ -38,7 +56,7 @@ def _summarize_tool_call(tc):
 
 
 def _summarize_tool_result(name, result):
-    """One-line preview of a tool result. Truncates noisy stdout."""
+    """One-line preview of a tool result; truncates noisy output."""
     if not isinstance(result, str):
         return f"{name} -> <non-string result>"
     one_line = " ".join(result.split())
@@ -47,8 +65,12 @@ def _summarize_tool_result(name, result):
     return f"{name} <- {one_line}"
 
 
-def execute_tool_call(tool_call, budget=None):
-    """Execute a tool call and return the output as a string."""
+def execute_tool_call(tool_call, budget=None, ladder=None):
+    """Run a single tool call and return its result as a string.
+
+    `ladder` is the conversation's ModelLadder, needed so the `escalate` tool
+    can move the agent up a rung.
+    """
     name = tool_call["function"]["name"]
     args_json = tool_call["function"]["arguments"]
 
@@ -80,67 +102,71 @@ def execute_tool_call(tool_call, budget=None):
     if name == "delete_task":
         return delete_task(args.get("task_id"))
 
+    if name == "escalate":
+        # The model judged this task too hard for the current model. Climb.
+        if ladder is None:
+            return "[error: escalation isn't available here]"
+        stronger = ladder.escalate()
+        if stronger:
+            return f"[escalated to a stronger model ({stronger}). Re-approach the task.]"
+        return "[already on the strongest model available — no higher rung.]"
+
     return f"[error: unknown tool '{name}']"
 
 
 class Conversation:
-    """Holds the persistent message history for one ongoing conversation.
+    """Holds the persistent message history and model ladder for one chat.
 
-    Create one of these and call run_turn() once per incoming user message.
-    The history lives on self.messages and survives across turns that's the
-    whole point. Later, with Discord, you'll keep one Conversation per channel
-    (a dict of {channel_id: Conversation}) so each chat remembers its own
-    thread.
+    Create one per conversation (e.g. per Discord channel) and call run_turn()
+    once per incoming message. History is restored from disk on creation, so the
+    conversation survives restarts.
     """
 
     def __init__(self, budget=None, conversation_id="default"):
         today = datetime.now().strftime("%A, %Y-%m-%d")
         system = SYSTEM_PROMPT + f"\n\nToday's date: {today}."
-        # Seed with just the system prompt.
-        self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         self.budget = budget
-        # ONE session log for the whole conversation
+        self.ladder = ModelLadder(MODEL_LADDER)
         self.session_path = session_path_for(conversation_id)
 
         saved = load_session(self.session_path)
         if saved:
             self.messages = saved
-            # Refresh the system prompt.
+            # The saved system prompt has an old date baked in — refresh it.
             self.messages[0] = {"role": "system", "content": system}
             print(f"[agent] resumed {self.session_path.name} ({len(self.messages)} msgs)")
         else:
             self.messages = [{"role": "system", "content": system}]
             print(f"[agent] new session {self.session_path.name}")
 
-
     def run_turn(self, user_message, deliver):
-        """Handle one user message.
-
-        Appends the message, runs the tool loop until the model returns a
-        final text reply (no tool calls), delivers that reply via deliver(),
-        and returns it. The history is left intact for the next turn.
-        """
+        """Handle one user message: run the tool loop until a plain-text reply,
+        deliver it, and leave the history intact for next time."""
         self.messages.append({"role": "user", "content": user_message})
+        self.ladder.reset()           # every turn starts on the cheapest model
+        consecutive_errors = 0
 
         for iteration in range(MAX_ITERATIONS):
-            # Compact the messages if they have grown past the threshold
-            self.messages, did_compact, info = maybe_compact(
-                self.messages, budget=self.budget
-            )
+            # Trim old history if it's grown too long (no-op while short). Must
+            # reassign onto self so the conversation keeps the compacted list.
+            self.messages, did_compact, info = maybe_compact(self.messages, budget=self.budget)
             if did_compact:
                 print(f"[compact] {info}")
 
-            assistant_msg = chat(self.messages, tools=TOOLS, budget=self.budget)
+            assistant_msg = chat(
+                self.messages, tools=TOOLS, budget=self.budget,
+                model=self.ladder.current(),
+            )
 
             if VERBOSE:
-                print(f"\n--- iteration {iteration} ---")
+                print(f"\n--- iteration {iteration} (model: {self.ladder.current()}) ---")
                 print("MODEL:", assistant_msg)
 
             self.messages.append(assistant_msg)
 
             tool_calls = assistant_msg.get("tool_calls")
             if not tool_calls:
-                # No tools requested -> this is the user-facing reply. Turn done.
+                # Plain-text reply -> this turn is done.
                 save_session(self.session_path, self.messages)
                 content = (assistant_msg.get("content") or "").strip()
                 if content:
@@ -150,7 +176,7 @@ class Conversation:
             for tool_call in tool_calls:
                 print(f"[iter {iteration}] {_summarize_tool_call(tool_call)}")
 
-                result = execute_tool_call(tool_call, budget=self.budget)
+                result = execute_tool_call(tool_call, budget=self.budget, ladder=self.ladder)
                 tool_name = tool_call["function"]["name"]
 
                 if VERBOSE:
@@ -164,10 +190,30 @@ class Conversation:
                     "content": result,
                 })
 
+                # Track tool errors for auto-escalation; any success clears it.
+                if isinstance(result, str) and result.startswith("[error"):
+                    consecutive_errors += 1
+                else:
+                    consecutive_errors = 0
+
+            # If the cheap model keeps fumbling, climb the ladder and nudge it.
+            if consecutive_errors >= ESCALATE_AFTER_ERRORS:
+                stronger = self.ladder.escalate()
+                if stronger:
+                    print(f"[escalate] {consecutive_errors} tool errors in a row -> {stronger}")
+                    self.messages.append({
+                        "role": "user",
+                        "content": (
+                            f"(System: you've been switched to a stronger model — {stronger}. "
+                            f"Re-approach the step that kept failing.)"
+                        ),
+                    })
+                    consecutive_errors = 0
+
             save_session(self.session_path, self.messages)
 
-        # Hit the per-TURN iteration cap without a text reply. Force one short
-        # reply for this turn, but keep the conversation alive for the next one.
+        # Per-turn iteration cap hit without a reply: force a short summary, but
+        # keep the conversation alive for the next message.
         save_session(self.session_path, self.messages)
         print("[agent] turn hit iteration limit; forcing a summary reply")
         self.messages.append({
@@ -178,7 +224,7 @@ class Conversation:
                 "Reply with text only — no tool calls."
             ),
         })
-        final = chat(self.messages, tools=None, budget=self.budget)
+        final = chat(self.messages, tools=None, budget=self.budget, model=self.ladder.current())
         content = (final.get("content") or "").strip()
         self.messages.append(final)
         save_session(self.session_path, self.messages)
@@ -189,7 +235,7 @@ class Conversation:
 
 
 if __name__ == "__main__":
-    # Read the system prompt from the file
+    # Terminal REPL for testing without Discord.
     from budget import Budget
     from config import MAX_TOKENS_DEFAULT, MAX_REQUESTS_PER_MINUTE_DEFAULT
 

@@ -3,10 +3,11 @@
 Everything in the agent speaks the OpenAI-style message format, and we send that
 format to OpenRouter (which is OpenAI-compatible). Because the whole codebase
 goes through this single `chat()` function, swapping the model or vendor is a
-config change, not a code change — nothing else knows or cares what's behind it.
+config change, not a code change.
 
-The one extra job here is budget accounting: ask the shared Budget for
-permission before spending, and record the tokens actually used afterward.
+This file also holds the ModelLadder: an ordered list of models, cheapest first,
+that the agent climbs only when it gets stuck — so most turns run on the cheap
+model and only hard ones reach for a stronger one.
 """
 import os
 from pathlib import Path
@@ -21,25 +22,55 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 
-def chat(messages, tools=None, temperature=None, budget=None):
+class ModelLadder:
+    """An ordered list of models, cheapest first (e.g. [haiku, sonnet, opus]).
+
+    The agent starts each turn at the bottom and climbs one rung when it gets
+    stuck, so the common case stays cheap and only genuinely hard turns spend
+    more. An empty ladder means "no escalation" — provider.chat falls back to
+    the configured default model.
+    """
+
+    def __init__(self, models):
+        self.models = list(models) if models else []
+        self.index = 0
+
+    def current(self):
+        """The model to use right now, or None if the ladder is empty."""
+        return self.models[self.index] if self.models else None
+
+    def escalate(self):
+        """Climb one rung. Returns the new model name, or None if already at the
+        top (nowhere higher to go)."""
+        if self.index < len(self.models) - 1:
+            self.index += 1
+            return self.models[self.index]
+        return None
+
+    def reset(self):
+        """Drop back to the cheapest model — called at the start of each turn."""
+        self.index = 0
+
+
+def chat(messages, tools=None, temperature=None, budget=None, model=None):
     """Send one chat-completion request and return the model's reply message.
 
     Args:
-        messages: the full conversation so far. The model is stateless, so the
-            entire history is re-sent on every call.
+        messages: the full conversation so far (the model is stateless, so the
+            whole history is re-sent every call).
         tools: optional list of tool/function schemas the model may call.
         temperature: optional sampling temperature.
-        budget: optional shared Budget. If given, the call is gated by the spend
-            cap and its token usage is recorded.
+        budget: optional shared Budget; if given, gates the call and records usage.
+        model: which model to call. Defaults to the configured MODEL when None,
+            so callers without a ladder still work.
 
     Returns:
-        The reply message dict (which may contain text, tool_calls, or both).
+        The reply message dict (text, tool_calls, or both).
 
     Raises:
         RuntimeError: if the budget blocks the call, or the API returns non-200.
     """
-    # Budget gate: refuse *before* spending if we're over a cap. The caller
-    # (main.py / discord_bot.py) catches this RuntimeError and reports it cleanly.
+    # Budget gate: refuse *before* spending if we're over a cap.
     if budget is not None:
         allowed, reason = budget.check_and_record()
         if not allowed:
@@ -49,8 +80,7 @@ def chat(messages, tools=None, temperature=None, budget=None):
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
     }
-    body = {"model": MODEL, "messages": messages}
-    # Only attach optional fields when set, so we don't override API defaults.
+    body = {"model": model or MODEL, "messages": messages}
     if tools is not None:
         body["tools"] = tools
     if temperature is not None:
@@ -69,5 +99,4 @@ def chat(messages, tools=None, temperature=None, budget=None):
         usage = payload.get("usage", {})
         budget.add_usage(usage.get("total_tokens", 0))
 
-    # The reply is the first choice's message — text and/or tool calls.
     return payload["choices"][0]["message"]

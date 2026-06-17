@@ -1,14 +1,19 @@
 {
   "provider": {
   "url": "https://openrouter.ai/api/v1/chat/completions",
-  "model": "anthropic/claude-haiku-4.5"
+  "model": "anthropic/claude-haiku-4.5",
+  "model_ladder": [
+    "anthropic/claude-haiku-4.5",
+    "anthropic/claude-sonnet-4.6",
+    "anthropic/claude-opus-4.8"
+  ]
 },
 "agent": {
   "max_iterations": 20,
   "max_tokens_default": 500000,
   "max_requests_per_minute_default": 60
 },
-"sandbox": {
+"sandbox": {  
   "container_name": "agent-sandbox",
   "timeout_seconds": 30,
   "max_output_chars": 4000
@@ -128,6 +133,14 @@
         "properties": {"task_id": {"type": "integer", "description": "The id of the task to delete."}},
         "required": ["task_id"]
       }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "escalate",
+      "description": "Switch yourself to a more capable (and more expensive) model for the rest of this task. Use ONLY when you've genuinely hit something too hard — a bug you keep getting wrong, reasoning you can't complete. Never for routine work.",
+      "parameters": {"type": "object", "properties": {}, "required": []}
     }
   }
 ]

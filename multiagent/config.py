@@ -21,6 +21,7 @@ with open(CONFIG_PATH, "r", encoding="utf-8") as f:
 # --- Provider: which endpoint and model to call ---
 PROVIDER_URL = _config["provider"]["url"]
 MODEL = _config["provider"]["model"]
+MODEL_LADDER = _config["provider"].get("model_ladder", [MODEL])
 
 # --- Agent loop limits ---
 MAX_ITERATIONS = _config["agent"]["max_iterations"]
