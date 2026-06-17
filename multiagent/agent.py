@@ -4,7 +4,7 @@ import os
 from provider import chat
 from sandbox import run_bash, edit_file
 from config import SYSTEM_PROMPT, MAX_ITERATIONS, TOOLS
-from sessions import start_session, save_session
+from sessions import session_path_for, load_session, save_session
 from context import maybe_compact
 from tasks import add_task, list_tasks, complete_task, delete_task
 from datetime import datetime
@@ -93,15 +93,25 @@ class Conversation:
     thread.
     """
 
-    def __init__(self, budget=None):
+    def __init__(self, budget=None, conversation_id="default"):
         today = datetime.now().strftime("%A, %Y-%m-%d")
         system = SYSTEM_PROMPT + f"\n\nToday's date: {today}."
         # Seed with just the system prompt.
         self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         self.budget = budget
         # ONE session log for the whole conversation
-        self.session_path = start_session()
-        print(f"[agent] session log: {self.session_path}")
+        self.session_path = session_path_for(conversation_id)
+
+        saved = load_session(self.session_path)
+        if saved:
+            self.messages = saved
+            # Refresh the system prompt.
+            self.messages[0] = {"role": "system", "content": system}
+            print(f"[agent] resumed {self.session_path.name} ({len(self.messages)} msgs)")
+        else:
+            self.messages = [{"role": "system", "content": system}]
+            print(f"[agent] new session {self.session_path.name}")
+
 
     def run_turn(self, user_message, deliver):
         """Handle one user message.

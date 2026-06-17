@@ -1,29 +1,37 @@
+"""Per-conversation history persistence.
+
+The agent keeps its message history in memory; that's gone the moment the
+process stops. To survive restarts we save the whole history to one stable
+file per conversation (keyed by id — e.g. a Discord channel id) after every
+turn, and load it back when a Conversation for that id is created.
+"""
 import json
-from datetime import datetime
 from pathlib import Path
 
 SESSIONS_DIR = Path(__file__).parent / "sessions"
 
-def start_session(user_goal=""):
-    """Creating the sessions dir if needed, returning the session file path for this log"""
-    SESSIONS_DIR.mkdir(exist_ok=True)
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    
-    # short slug from goal for findability
-    slug = ""
-    if user_goal:
-        slug_chars = []
-        for c in user_goal[:40]:
-            if c.isalnum():
-                slug_chars.append(c)
-            elif slug_chars and slug_chars[-1] != "_":
-                slug_chars.append("_")
-        slug = "".join(slug_chars).strip("_").lower()
 
-    filename = f"session_{timestamp}_{slug}.json" if slug else f"session_{timestamp}.json"
-    return SESSIONS_DIR / filename
+def session_path_for(conversation_id):
+    """The stable file for one conversation. Same id -> same file across runs,
+    so history persists instead of starting a fresh timestamped file each time."""
+    SESSIONS_DIR.mkdir(exist_ok=True)
+    safe = str(conversation_id).replace("/", "_").replace("\\", "_")
+    return SESSIONS_DIR / f"session_{safe}.json"
+
+
+def load_session(path):
+    """Return the saved messages list, or None if there's nothing to resume."""
+    if not path.exists():
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        # Corrupt or unreadable -> start fresh rather than crash the bot.
+        return None
+
 
 def save_session(path, messages):
-    """automatically dump the messages to a list in the session file"""
+    """Overwrite the conversation's file with the full current history."""
     with open(path, "w", encoding="utf-8") as f:
         json.dump(messages, f, indent=2, ensure_ascii=False)

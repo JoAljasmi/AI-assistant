@@ -59,7 +59,7 @@ def _get_conversation(channel_id):
     with _state_lock:
         convo = conversations.get(channel_id)
         if convo is None:
-            convo = Conversation(budget=budget)
+            convo = Conversation(budget=budget, conversation_id=channel_id)
             conversations[channel_id] = convo
         return convo
 
