@@ -1,26 +1,21 @@
 """Discord transport for the assistant.
 
-The whole trick: discord.py runs an asyncio event loop, but our agent is
-blocking (HTTP, subprocess, and approval that waits on a queue). So we NEVER
-run a turn on the event loop. We hand each turn to a worker thread via
-run_in_executor, which leaves the loop free to keep receiving messages —
-including the y/n approval answer that the turn is blocked waiting for.
+The agent is blocking (HTTP, subprocess, approval-waits), so we never run a turn
+on the asyncio event loop — each turn goes to a worker thread via
+run_in_executor, leaving the loop free to receive messages (including approval
+answers).
 
-Routing in on_message:
-  1. If this channel has an approval waiting, the message IS the answer.
-  2. If a turn is already running here, tell the user to wait.
-  3. Otherwise it's a new task -> run it on a worker thread.
-
-One Conversation per channel (keyed by channel id) so each chat keeps its own
-memory. Sending to Discord from the worker thread hops back onto the loop via
-asyncio.run_coroutine_threadsafe.
+Reminders: a background scheduler thread (scheduler.py) wakes periodically and
+asks tasks.due_reminders() what's due. To message you *first* — with no incoming
+message to reply to — it hops onto the event loop with run_coroutine_threadsafe,
+the same trick approvals use. It sends to the last channel you spoke in, which we
+remember on disk so reminders still work right after a restart.
 
 Setup (once):
-  - Create an application + bot at https://discord.com/developers
-  - Enable the "Message Content Intent" (Bot tab) — without it message.content
-    is empty and nothing works.
-  - Put the bot token in your .env as DISCORD_TOKEN=...
-  - Invite the bot to a server (or just DM it).
+  - Create an app + bot at https://discord.com/developers
+  - Enable the "Message Content Intent" (Bot tab)
+  - Put the token in .env as DISCORD_TOKEN=...
+  - Invite the bot to a server (or DM it)
 """
 import asyncio
 import os
@@ -34,21 +29,43 @@ from dotenv import load_dotenv
 from agent import Conversation
 from budget import Budget
 from config import MAX_TOKENS_DEFAULT, MAX_REQUESTS_PER_MINUTE_DEFAULT
+from scheduler import run_scheduler
 import approval
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 
-# One shared budget across all channels — your hard cap protects your wallet
-# no matter how many chats are open.
 budget = Budget(MAX_TOKENS_DEFAULT, MAX_REQUESTS_PER_MINUTE_DEFAULT)
 
-# Per-channel state, guarded by a lock because the event loop thread and the
-# worker threads both touch it.
+# Per-channel state, guarded because the event loop and worker threads share it.
 conversations = {}        # channel_id -> Conversation
 busy = set()              # channel_ids with a turn currently running
-pending_answers = {}      # channel_id -> queue.Queue waiting for an approval answer
+pending_answers = {}      # channel_id -> queue.Queue awaiting an approval answer
 _state_lock = threading.Lock()
+
+# Where to send reminders: the last channel the user spoke in. Persisted to disk
+# so a reminder due right after a restart still has somewhere to go (before the
+# user has said anything in the new run).
+REMINDER_CHANNEL_FILE = Path(__file__).parent / "reminder_channel.txt"
+
+
+def _load_reminder_channel():
+    try:
+        return int(REMINDER_CHANNEL_FILE.read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _save_reminder_channel(channel_id):
+    try:
+        REMINDER_CHANNEL_FILE.write_text(str(channel_id))
+    except OSError:
+        pass
+
+
+reminder_channel_id = _load_reminder_channel()
+scheduler_stop = threading.Event()
+_scheduler_started = False
 
 intents = discord.Intents.default()
 intents.message_content = True    # privileged — enable it in the dev portal too
@@ -64,22 +81,29 @@ def _get_conversation(channel_id):
         return convo
 
 
+async def _send_to_channel(channel_id, text):
+    """Send text to a channel by id, even if we have no message object for it
+    (which is the case for a proactive reminder)."""
+    channel = client.get_channel(channel_id)
+    if channel is None:
+        channel = await client.fetch_channel(channel_id)
+    if not text:
+        return
+    for i in range(0, len(text), 1900):     # Discord caps near 2000 chars
+        await channel.send(text[i:i + 1900])
+
+
 def _run_turn_blocking(channel, content, loop):
-    """Runs on a WORKER thread. Binds Discord approval I/O for this channel,
-    then runs one conversation turn."""
+    """Runs on a WORKER thread: bind Discord approval I/O, run one turn."""
     channel_id = channel.id
 
     def send(text):
-        # Discord caps messages near 2000 chars; chunk to be safe (code replies
-        # get long). Each send hops onto the event loop and we wait for it.
         if not text:
             return
         for i in range(0, len(text), 1900):
-            fut = asyncio.run_coroutine_threadsafe(channel.send(text[i:i + 1900]), loop)
-            fut.result()
+            asyncio.run_coroutine_threadsafe(channel.send(text[i:i + 1900]), loop).result()
 
     def prompt(worker_id, command):
-        # Arm an answer queue for this channel, then show the request.
         answer_q = queue.Queue()
         with _state_lock:
             pending_answers[channel_id] = answer_q
@@ -98,18 +122,36 @@ def _run_turn_blocking(channel, content, loop):
         return answer
 
     approval.bind_approval_io(prompt, wait)
-
     convo = _get_conversation(channel_id)
     convo.run_turn(content, deliver=send)
 
 
 @client.event
 async def on_ready():
+    global _scheduler_started
     print(f"[discord] logged in as {client.user}")
+    if _scheduler_started:
+        return  # on_ready can fire again on reconnect; only start once
+    _scheduler_started = True
+
+    loop = asyncio.get_running_loop()
+
+    def reminder_send(channel_id, text):
+        # Called from the scheduler thread; hop onto the loop and wait.
+        asyncio.run_coroutine_threadsafe(_send_to_channel(channel_id, text), loop).result()
+
+    threading.Thread(
+        target=run_scheduler,
+        args=(reminder_send, lambda: reminder_channel_id, scheduler_stop),
+        kwargs={"interval": 60},
+        daemon=True,
+    ).start()
+    print("[discord] reminder scheduler started")
 
 
 @client.event
 async def on_message(message):
+    global reminder_channel_id
     if message.author == client.user:
         return
     content = message.content.strip()
@@ -117,6 +159,12 @@ async def on_message(message):
         return
 
     channel_id = message.channel.id
+
+    # Remember this channel for reminders (and persist if it changed).
+    if reminder_channel_id != channel_id:
+        reminder_channel_id = channel_id
+        _save_reminder_channel(channel_id)
+
     loop = asyncio.get_running_loop()
 
     # 1. Pending approval here? This message is the answer.
@@ -126,14 +174,14 @@ async def on_message(message):
         answer_q.put(content)
         return
 
-    # 2. Already running a turn here? Don't stack another on top.
+    # 2. Already running a turn here? Don't stack another.
     with _state_lock:
         if channel_id in busy:
             await message.channel.send("hang on — still working on the last thing.")
             return
         busy.add(channel_id)
 
-    # 3. New task -> worker thread, so the event loop stays free for approvals.
+    # 3. New task -> worker thread, so the loop stays free for approvals.
     def work():
         try:
             _run_turn_blocking(message.channel, content, loop)
