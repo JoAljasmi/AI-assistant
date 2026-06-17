@@ -1,3 +1,5 @@
 discord.py>=2.7.1      # Discord bot transport
 requests>=2.31.0       # HTTP calls to the LLM provider (OpenRouter)
 python-dotenv>=1.0.0   # loads API keys / tokens from .env
+ddgs>=9.0.0
+beautifulsoup4>=4.12.0

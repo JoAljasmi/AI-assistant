@@ -142,6 +142,33 @@
       "description": "Switch yourself to a more capable (and more expensive) model for the rest of this task. Use ONLY when you've genuinely hit something too hard — a bug you keep getting wrong, reasoning you can't complete. Never for routine work.",
       "parameters": {"type": "object", "properties": {}, "required": []}
     }
-  }
+  },
+  
+  { "type": "function", "function": {
+    "name": "save_note",
+    "description": "Save a freeform note — any fact the user wants remembered that isn't a dated task (preferences, passwords, where they left something, ideas).",
+    "parameters": {"type": "object", "properties": {"content": {"type": "string", "description": "The note text."}}, "required": ["content"]} } },
+  { "type": "function", "function": {
+      "name": "search_notes",
+      "description": "Search saved notes by keyword, or list all if no query. Use this to recall something the user mentioned earlier.",
+      "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "Keyword to search. Omit to list everything."}}, "required": []} } },
+  { "type": "function", "function": {
+      "name": "delete_note",
+      "description": "Delete a saved note by its id.",
+      "parameters": {"type": "object", "properties": {"note_id": {"type": "integer", "description": "The id of the note to delete."}}, "required": ["note_id"]} } 
+  },
+
+  { "type": "function", "function": {
+        "name": "web_search",
+        "description": "Search the web for current or factual info you might not know. Returns titles, URLs, and snippets — use read_url to read a result in full.",
+        "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "max_results": {"type": "integer", "description": "1-10, default 5."}}, "required": ["query"]} } },
+  { "type": "function", "function": {
+        "name": "read_url",
+        "description": "Fetch a web page and return its readable text. Use after web_search, or when the user shares a link.",
+        "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]} } },
+  { "type": "function", "function": {
+        "name": "weather",
+        "description": "Current weather and today's temperature range for a city or place name.",
+        "parameters": {"type": "object", "properties": {"location": {"type": "string"}}, "required": ["location"]} } }
 ]
 }

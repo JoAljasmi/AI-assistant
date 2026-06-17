@@ -24,6 +24,10 @@ from config import SYSTEM_PROMPT, MAX_ITERATIONS, TOOLS, MODEL_LADDER
 from sessions import session_path_for, load_session, save_session
 from context import maybe_compact
 from tasks import add_task, list_tasks, complete_task, delete_task
+from notes import save_note, search_notes, delete_note
+from web_search import web_search
+from web_read import read_url
+from weather import weather
 
 
 VERBOSE = os.environ.get("VERBOSE", "").lower() in ("1", "true", "yes")
@@ -101,6 +105,18 @@ def execute_tool_call(tool_call, budget=None, ladder=None):
         return complete_task(args.get("task_id"))
     if name == "delete_task":
         return delete_task(args.get("task_id"))
+    if name == "save_note":
+        return save_note(args.get("content"))
+    if name == "search_notes":
+        return search_notes(args.get("query", ""))
+    if name == "delete_note":
+        return delete_note(args.get("note_id"))
+    if name == "web_search":
+        return web_search(args.get("query"), args.get("max_results", 5))
+    if name == "read_url":
+        return read_url(args.get("url"))
+    if name == "weather":
+        return weather(args.get("location"))
 
     if name == "escalate":
         # The model judged this task too hard for the current model. Climb.
@@ -143,13 +159,17 @@ class Conversation:
         """Handle one user message: run the tool loop until a plain-text reply,
         deliver it, and leave the history intact for next time."""
         self.messages.append({"role": "user", "content": user_message})
+        today = datetime.now().strftime("%A, %Y-%m-%d")
+        self.messages[0] = {"role": "system", "content": SYSTEM_PROMPT + f"\n\nToday's date: {today}."}
         self.ladder.reset()           # every turn starts on the cheapest model
         consecutive_errors = 0
+        
 
         for iteration in range(MAX_ITERATIONS):
             # Trim old history if it's grown too long (no-op while short). Must
             # reassign onto self so the conversation keeps the compacted list.
             self.messages, did_compact, info = maybe_compact(self.messages, budget=self.budget)
+            
             if did_compact:
                 print(f"[compact] {info}")
 
