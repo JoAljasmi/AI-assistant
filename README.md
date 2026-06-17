@@ -19,17 +19,17 @@ A self-hosted AI assistant that lives on my machine, talks to me over Discord, a
 ```
 me    could you set that I have a task for 7pm today
 bot   What should I call it?
-me    it's my raiding session
-bot   Done — "raiding session" today at 19:00.
+me    it's my study session
+bot   Done — "study session" today at 19:00.
 
 me    what do I have to do today?
-bot   You've got the raiding session at 19:00. That's it so far.
+bot   You've got the study session at 19:00. That's it so far.
 ```
 
 Later, at 19:00, with no prompt from me:
 
 ```
-bot   Reminder — raiding session (at 19:00).
+bot   Reminder — study session (at 19:00).
 ```
 
 ## Architecture
