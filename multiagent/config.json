@@ -1,7 +1,7 @@
 {
   "provider": {
   "url": "https://openrouter.ai/api/v1/chat/completions",
-  "model": "anthropic/claude-sonnet-4.6"
+  "model": "anthropic/claude-haiku-4.5"
 },
 "agent": {
   "max_iterations": 20,

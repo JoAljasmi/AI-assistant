@@ -1,67 +1,75 @@
-"""Serializes approval prompts across all worker threads.
+"""Serializes approval prompts and routes the user's y/n answer back.
 
-The Problem
------------
-With parallel workers, three threads might each call run_bash at almost the
-same instant. If each one independently puts a request on a queue, prints
-its prompt, and waits, the prints interleave and the user's `y` answer can
-get routed to the wrong worker (or no worker at all).
+Terminal mode (default): the prompt is printed and the answer comes from the
+console thread reading stdin (via submit_response). Unchanged from before.
 
-The Fix
--------
-A single global lock serializes the entire prompt-and-wait sequence. Only
-one approval is "active" at a time. The others queue up and are handled
-one after another — clearly labeled with their worker_id, in order.
+Other transports (e.g. the Discord bot) can override HOW the prompt is shown
+and HOW the answer is obtained, per-thread, by calling bind_approval_io()
+on the worker thread before running a turn. If nothing is bound, we fall back
+to the console path below — so the terminal behaves exactly as it always has.
 
 Auto-Approve Mode
 -----------------
-When the user types `auto` in the console (or sets AUTO_APPROVE=1), the
-prompt is skipped and the command auto-approves. The DANGER filter in
-sandbox.py is unaffected — auto mode never bypasses hard-blocks.
+When the user types `auto` (or sets AUTO_APPROVE=1), the prompt is skipped and
+the command auto-approves. The DANGER filter in sandbox.py is unaffected — auto
+mode never bypasses hard-blocks. (Tip: keep auto OFF on Discord so writes stay
+visible and gated.)
 """
 import os
 import queue
 import threading
 
-# Held for the entire prompt-print + queue-put + queue-get cycle.
-# Workers calling request_approval will queue up on this lock and be
-# handled one at a time.
+# Held for the entire prompt-print + queue cycle in the CONSOLE path.
 _approval_lock = threading.Lock()
 
-# Single response queue — the console thread puts the user's reply here.
+# Console response queue — the console thread puts the user's stdin reply here.
 _responses = queue.Queue()
 
-# An event the console thread checks to know if an approval is pending.
+# Set while a console-path approval is waiting, so console_control knows the
+# next stdin line is an approval answer rather than a command.
 _pending = threading.Event()
 
-# Auto-approve state. Toggled by the console `auto` command. Initial value
-# can be set via env: AUTO_APPROVE=1 starts in auto mode.
+# Auto-approve state.
 _auto_approve = threading.Event()
 if os.environ.get("AUTO_APPROVE", "").lower() in ("1", "true", "yes"):
     _auto_approve.set()
 
-# Lock guarding _auto_approve toggle (so prints don't race the state read).
 _auto_lock = threading.Lock()
+
+# Per-thread approval I/O override. A transport binds these on the worker
+# thread that will run the turn; request_approval picks them up.
+_io_local = threading.local()
+
+
+def bind_approval_io(prompt_fn, wait_fn):
+    """Bind the current thread's approval I/O.
+
+    prompt_fn(worker_id, command): show the approval request to the user.
+    wait_fn() -> str: block until the user's answer arrives, return it.
+
+    Called by a transport (e.g. the Discord bot) on the worker thread before
+    running a turn. If never called on this thread, request_approval uses the
+    console path instead.
+    """
+    _io_local.prompt = prompt_fn
+    _io_local.wait = wait_fn
 
 
 def is_pending():
-    """Used by console_control to decide whether the next stdin line is
-    an approval answer (True) or a console command (False)."""
+    """Console path: is a stdin approval answer expected next?"""
     return _pending.is_set()
 
 
 def submit_response(text):
-    """Called by console_control when it sees an approval-answer line."""
+    """Console path: console_control calls this with an approval-answer line."""
     _responses.put(text)
 
 
 def is_auto_approve():
-    """Read current auto-approve state."""
     return _auto_approve.is_set()
 
 
 def toggle_auto_approve():
-    """Flip auto-approve on/off. Returns the new state (True = on)."""
     with _auto_lock:
         if _auto_approve.is_set():
             _auto_approve.clear()
@@ -72,25 +80,26 @@ def toggle_auto_approve():
 
 
 def request_approval(worker_id, command, print_block, print_auto_line):
-    """Block until the user types y or n for this command.
+    """Block until the user approves or denies this command. Returns bool.
 
-    Returns True if approved, False otherwise.
-
-    print_block(worker_id, command):  print the full bordered approval block.
-    print_auto_line(worker_id, command):  print the one-liner used in auto mode.
-
-    Both are passed in (instead of being built here) so sandbox.py owns the
-    look and feel and approval.py owns only the synchronization.
+    print_block / print_auto_line are the console-path display functions passed
+    by sandbox.py. They're only used when no per-thread I/O is bound.
     """
-    # Fast path: if auto-approve is on, skip the prompt entirely. We still
-    # print a one-liner so the user can see what ran (no hidden state).
+    # Fast path: auto-approve skips the prompt (danger filter already applied).
     if _auto_approve.is_set():
-        # Light lock so the auto line doesn't interleave with another worker.
         with _approval_lock:
             print_auto_line(worker_id, command)
         return True
 
-    # Normal path: serialize, prompt, wait for the user's answer.
+    # If a transport bound its own I/O on this thread (e.g. Discord), use it.
+    prompt = getattr(_io_local, "prompt", None)
+    wait = getattr(_io_local, "wait", None)
+    if prompt is not None and wait is not None:
+        prompt(worker_id, command)
+        answer = wait()
+        return answer.strip().lower() in ("y", "yes")
+
+    # Console path (terminal): print the block, then wait on the stdin queue.
     with _approval_lock:
         print_block(worker_id, command)
         _pending.set()

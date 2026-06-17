@@ -121,7 +121,6 @@ def truncate_output(text):
     return kept + marker
 
 def run_bash(command):
-    # Tier 1: hard-block dangerous commands. No approval can override.
     dangerous, pattern = is_dangerous(command)
     if dangerous:
         msg = f"[blocked: command matches the dangerous pattern: {pattern}]"
@@ -147,9 +146,8 @@ def run_bash(command):
         # Lazy imports to avoid circular dependencies (workers imports agent,
         # agent imports sandbox).
         from approval import request_approval
-        from workers import current_worker_id
-
-        worker_id = current_worker_id()
+    
+        worker_id = "assistant"
 
         def print_block(wid, cmd):
             """Full bordered approval block for interactive mode. Called
