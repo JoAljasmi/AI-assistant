@@ -1,8 +1,25 @@
+"""Sandboxed shell + file-edit tools, with a three-tier safety model.
+
+All commands run inside a Docker container (never the host directly), and every
+command is classified before it runs:
+
+  Tier 1 — DANGEROUS: hard-blocked, can never be approved (rm -rf /, fork bombs,
+           piping the internet into a shell, formatting disks, ...).
+  Tier 2 — SAFE: read-only commands (ls, cat, grep, ...) auto-run with no prompt.
+  Tier 3 — EVERYTHING ELSE: writes, installs, deletes, and any arbitrary code
+           execution require an explicit human y/n approval.
+
+The guiding idea: reads are free, the truly catastrophic is impossible, and
+anything that can change state goes through a person. `edit_file` is separately
+constrained to paths under /workspace.
+"""
 import os
 import subprocess
 import re
 from config import CONTAINER_NAME, TIMEOUT_SECONDS, MAX_OUTPUT_CHARS
 
+# Tier 1 — patterns that are NEVER allowed, approval or not. These are the
+# commands that could wreck the host or the container irrecoverably.
 DANGEROUS_PATTERNS = [
     # rm -rf on roots, home, or absolute paths near root
     r"\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)\s+(/|~|/\*|\.\./)",
@@ -17,7 +34,7 @@ DANGEROUS_PATTERNS = [
     # Broad chmod/chown on root or home
     r"\bchmod\s+-R\s+\d+\s+(/|~)",
     r"\bchown\s+-R\s+.*\s+(/|~)",
-    # Piping remote scripts into a shell
+    # Piping a remote script straight into a shell
     r"\bcurl\s+[^\|]*\|\s*(bash|sh|zsh)\b",
     r"\bwget\s+[^\|]*\|\s*(bash|sh|zsh)\b",
     # Shutdown / reboot / halt
@@ -27,16 +44,14 @@ DANGEROUS_PATTERNS = [
     r">\s*/dev/sd",
 ]
 
-# Commands that are truly read-only and side-effect-free.
-# These auto-approve so the user is not prompted for every `ls` or `cat`.
-# Anything not on this list — including pip, python, pytest, find, sed, awk —
-# requires explicit user approval. The cost is a few extra prompts per demo;
-# the benefit is that ALL arbitrary-code-execution paths (python -c, pytest
-# running user code, pip pulling packages, sed -i, find -delete, find -exec)
-# go through a human decision.
+# Tier 2 — commands that are genuinely read-only and side-effect-free, so they
+# auto-approve (no prompt for every `ls` or `cat`). Anything NOT here — pip,
+# python, pytest, find, sed, awk — falls through to Tier 3 and needs approval,
+# because each of those can execute arbitrary code or mutate state.
 #
-# A command is "safe" if it consists ONLY of safe sub-commands chained by
-# safe operators (| && ;). A single non-safe token taints the whole command.
+# A command counts as safe only if EVERY sub-command (split on | && ; ||) starts
+# with one of these AND it contains no unsafe token below. One bad token taints
+# the whole chain.
 SAFE_COMMANDS = {
     # File inspection (read-only)
     "ls", "cat", "head", "tail", "wc", "file", "stat", "tree",
@@ -50,15 +65,15 @@ SAFE_COMMANDS = {
     "echo", "printf", "which", "type", "command",
 }
 
-# Patterns that cancel "safe" status anywhere in the command — these write,
-# install, delete, or otherwise mutate state. Belt-and-suspenders: even if a
-# SAFE_COMMAND is used (e.g. `cat`), a redirect (`cat foo > bar`) makes it
-# a write, so we taint the whole command.
+# Tokens that cancel "safe" status anywhere in a command — they write, install,
+# delete, or reach the network. Belt-and-suspenders: even a safe command like
+# `cat` becomes a write via redirection (`cat foo > bar`), so a stray `>` taints
+# the whole line.
 UNSAFE_TOKEN_PATTERNS = [
     r">\s*\S",          # output redirect to a file
     r">>\s*\S",         # append redirect
     r"\btee\b",         # tee writes
-    r"\brm\b",          # any rm (dangerous variants are hard-blocked above)
+    r"\brm\b",          # any rm (the catastrophic variants are hard-blocked above)
     r"\bmv\b",          # any mv
     r"\bcp\b",          # any cp
     r"\bmkdir\b",       # making dirs
@@ -74,7 +89,8 @@ UNSAFE_TOKEN_PATTERNS = [
 
 
 def is_dangerous(command):
-    """Hard-block check. These can never be approved."""
+    """Tier 1 check. Returns (True, matched_pattern) if the command can never be
+    allowed, else (False, None)."""
     for pattern in DANGEROUS_PATTERNS:
         if re.search(pattern, command):
             return True, pattern
@@ -82,19 +98,14 @@ def is_dangerous(command):
 
 
 def is_safe(command):
-    """Auto-approve check. Read-only commands skip the approval prompt.
-
-    Returns True only when the command (a) does not contain any unsafe token
-    pattern AND (b) its primary command is in SAFE_COMMANDS.
-    """
-    # Any unsafe token taints the whole command (catches `cat foo > bar`).
+    """Tier 2 check. True only when the command is purely read-only: it contains
+    no unsafe token AND every sub-command's first word is in SAFE_COMMANDS."""
+    # Any unsafe token taints the whole command (catches e.g. `cat foo > bar`).
     for pattern in UNSAFE_TOKEN_PATTERNS:
         if re.search(pattern, command):
             return False
 
-    # Split on pipes/&&/;/|| and check every sub-command's first token.
-    # If any sub-command starts with something not in SAFE_COMMANDS,
-    # the whole chain is not safe.
+    # Split on pipes / && / ; / || and check each sub-command's first token.
     subs = re.split(r"\|\||&&|;|\|", command)
     for sub in subs:
         sub = sub.strip()
@@ -107,7 +118,8 @@ def is_safe(command):
 
 
 def truncate_output(text):
-    """Truncate text to MAX_OUTPUT_CHARS characters, with a visible marker if cut off"""
+    """Cap output at MAX_OUTPUT_CHARS, with a visible marker if it was cut, so a
+    huge stdout can't blow up the model's context window."""
     if len(text) <= MAX_OUTPUT_CHARS:
         return text
     kept = text[:MAX_OUTPUT_CHARS]
@@ -120,39 +132,40 @@ def truncate_output(text):
     )
     return kept + marker
 
+
 def run_bash(command):
+    """Run a shell command in the sandbox container, after the three-tier check."""
+    # Tier 1: hard-block dangerous commands. No approval can override this.
     dangerous, pattern = is_dangerous(command)
     if dangerous:
         msg = f"[blocked: command matches the dangerous pattern: {pattern}]"
         print(msg)
         return msg
 
-    # Tier 2: auto-approve safe (read-only) commands unless approval is
-    # forced off. This is the default. Set REQUIRE_APPROVAL=0 to skip all
-    # prompts (useful for unattended runs); set REQUIRE_APPROVAL=all to
-    # prompt on every command including read-only ones.
+    # Tier 2: auto-approve read-only commands (the default). The REQUIRE_APPROVAL
+    # env var can force-off all prompts ("0"/"none") or force them on for every
+    # command ("all"); otherwise only non-safe commands prompt.
     approval_mode = os.environ.get("REQUIRE_APPROVAL", "default").lower()
-    needs_prompt = True
     if approval_mode in ("0", "false", "off", "none"):
         needs_prompt = False
     elif approval_mode == "all":
         needs_prompt = True
     else:
-        # Default: prompt only for non-safe commands.
         needs_prompt = not is_safe(command)
 
-    # Tier 3: prompt for explicit approval on writes, installs, deletes, etc.
+    # Tier 3: prompt for explicit human approval on writes, installs, deletes,
+    # and any arbitrary code execution.
     if needs_prompt:
-        # Lazy imports to avoid circular dependencies (workers imports agent,
-        # agent imports sandbox).
+        # Imported here (not at top) to avoid a circular import at load time.
         from approval import request_approval
-    
+
+        # Single-agent build: no parallel workers, so the caller is just the
+        # assistant. (This label only appears in the approval prompt.)
         worker_id = "assistant"
 
         def print_block(wid, cmd):
-            """Full bordered approval block for interactive mode. Called
-            under the approval lock, so it can't interleave with another
-            worker's prompt."""
+            """Print the full, bordered approval block. Called under the approval
+            lock, so it can't interleave with another prompt."""
             border = "=" * 70
             print()
             print(border)
@@ -166,9 +179,8 @@ def run_bash(command):
             print(" y/n? > ", flush=True, end="")
 
         def print_auto_line(wid, cmd):
-            """One-liner used in auto-approve mode so the user can still see
-            what ran without being prompted."""
-            # First line only, truncated. Full command is in the session log.
+            """One-liner shown in auto-approve mode, so the user still sees what
+            ran without being prompted."""
             first = cmd.splitlines()[0] if cmd else ""
             if len(first) > 80:
                 first = first[:77] + "..."
@@ -178,7 +190,7 @@ def run_bash(command):
         if not approved:
             return "[user denied command execution]"
 
-    #using docker to run the command
+    # Run the command inside the sandbox container.
     try:
         result = subprocess.run(
             ["docker", "exec", CONTAINER_NAME, "bash", "-c", command],
@@ -188,22 +200,27 @@ def run_bash(command):
         )
     except subprocess.TimeoutExpired:
         return f"[error: command timed out after {TIMEOUT_SECONDS} seconds]"
-        #returning readable outputs
+
+    # Return a readable, truncated summary of exit code + stdout + stderr.
     formatted = (
         f"[exit code: {result.returncode}]\n"
         f"[stdout]\n{result.stdout}\n"
         f"[stderr]\n{result.stderr}"
-        )
+    )
     return truncate_output(formatted)
 
 
 def edit_file(path, old_text, new_text):
-    """Replace exactly one occurrence of old_text with new_text in the file at path.
-    Path must be inside /workspace."""
-    
+    """Replace exactly one occurrence of old_text with new_text in a file.
+
+    Constrained to /workspace, and deliberately fails if old_text is missing or
+    ambiguous (appears more than once) — so an edit is always precise and never
+    silently changes the wrong place.
+    """
     if not path.startswith("/workspace/") and path != "/workspace":
         return f"[error: edit_file refused, path must be under /workspace, got: {path}]"
-    
+
+    # Read the current contents out of the container.
     read = subprocess.run(
         ["docker", "exec", CONTAINER_NAME, "cat", path],
         capture_output=True, text=True,
@@ -213,6 +230,7 @@ def edit_file(path, old_text, new_text):
 
     content = read.stdout
 
+    # Require exactly one match, so the edit is unambiguous.
     count = content.count(old_text)
     if count == 0:
         return f"[error: old_text not found in {path}]"
@@ -223,12 +241,12 @@ def edit_file(path, old_text, new_text):
         )
     new_content = content.replace(old_text, new_text)
 
-    # writing back with stdin to avoid shell escape
+    # Write back via stdin (tee) to avoid any shell-escaping issues.
     write = subprocess.run(
         ["docker", "exec", "-i", CONTAINER_NAME, "tee", path],
         input=new_content, text=True, capture_output=True,
     )
     if write.returncode != 0:
         return f"[error: could not write {path}: {write.stderr.strip()}]"
-    
+
     return f"[edit_file ok: replaced 1 occurence in {path}]"

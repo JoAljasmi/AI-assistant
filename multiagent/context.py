@@ -17,7 +17,7 @@ conversation into a single short synthetic message. Keep:
   - the most recent N messages verbatim (recent context the model needs)
 Drop everything between, replaced by one "earlier work summary" message.
 
-This is the second piece of VG.2 context engineering. The first piece is
+This is one half of the context-engineering strategy; the other half is
 tool-output truncation in sandbox.truncate_output.
 
 API

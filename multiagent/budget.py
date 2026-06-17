@@ -6,7 +6,7 @@ from collections import deque
 class Budget:
     """Tracks token spending and request rate.
 
-    Three behaviors VG.3 cares about:
+    Three behaviors:
       1. Live cost: snapshot() returns current totals.
       2. Soft warning: fires ONCE when usage crosses warn_threshold (e.g. 80%
          of max_tokens or max_requests_per_minute). Re-arms if the user
