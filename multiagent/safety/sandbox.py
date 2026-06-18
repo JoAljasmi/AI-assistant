@@ -16,7 +16,7 @@ constrained to paths under /workspace.
 import os
 import subprocess
 import re
-from config import CONTAINER_NAME, TIMEOUT_SECONDS, MAX_OUTPUT_CHARS
+from ..config import CONTAINER_NAME, TIMEOUT_SECONDS, MAX_OUTPUT_CHARS
 
 # Tier 1 — patterns that are NEVER allowed, approval or not. These are the
 # commands that could wreck the host or the container irrecoverably.
@@ -157,7 +157,7 @@ def run_bash(command):
     # and any arbitrary code execution.
     if needs_prompt:
         # Imported here (not at top) to avoid a circular import at load time.
-        from approval import request_approval
+        from ..core.approval import request_approval
 
         # Single-agent build: no parallel workers, so the caller is just the
         # assistant. (This label only appears in the approval prompt.)

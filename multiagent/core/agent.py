@@ -17,17 +17,18 @@ VERBOSE=1 also dumps raw model messages and tool results for debugging.
 import json
 import os
 from datetime import datetime
-from settings import set_mention_mode
-from provider import chat, ModelLadder
-from sandbox import run_bash, edit_file
-from config import SYSTEM_PROMPT, MAX_ITERATIONS, TOOLS, MODEL_LADDER
-from sessions import session_path_for, load_session, save_session
-from context import maybe_compact
-from tasks import add_task, list_tasks, complete_task, delete_task
-from notes import save_note, search_notes, delete_note
-from web_search import web_search
-from web_read import read_url
-from weather import weather
+
+from ..config import SYSTEM_PROMPT, MAX_ITERATIONS, TOOLS, MODEL_LADDER
+from ..runtime.settings import set_mention_mode
+from ..runtime.sessions import session_path_for, load_session, save_session
+from ..safety.sandbox import run_bash, edit_file
+from ..skills.notes import save_note, search_notes, delete_note
+from ..skills.tasks import add_task, list_tasks, complete_task, delete_task
+from ..skills.weather import weather
+from ..skills.web_read import read_url
+from ..skills.web_search import web_search
+from .context import maybe_compact
+from .provider import chat, ModelLadder
 
 
 VERBOSE = os.environ.get("VERBOSE", "").lower() in ("1", "true", "yes")
@@ -258,8 +259,9 @@ class Conversation:
 
 if __name__ == "__main__":
     # Terminal REPL for testing without Discord.
-    from budget import Budget
-    from config import MAX_TOKENS_DEFAULT, MAX_REQUESTS_PER_MINUTE_DEFAULT
+    # Run with:  python -m multiagent.core.agent
+    from .budget import Budget
+    from ..config import MAX_TOKENS_DEFAULT, MAX_REQUESTS_PER_MINUTE_DEFAULT
 
     budget = Budget(MAX_TOKENS_DEFAULT, MAX_REQUESTS_PER_MINUTE_DEFAULT)
     convo = Conversation(budget=budget)

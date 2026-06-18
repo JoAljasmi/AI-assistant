@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import Path
 
-_PATH = Path(__file__).parent / "bot_settings.json"
+from ..paths import SETTINGS_FILE as _PATH
 
 
 def _load():

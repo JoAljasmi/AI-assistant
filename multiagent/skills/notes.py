@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "notes.db"
+from ..paths import NOTES_DB as DB_PATH
 
 
 @contextmanager

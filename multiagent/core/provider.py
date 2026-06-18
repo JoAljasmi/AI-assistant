@@ -15,7 +15,7 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
-from config import PROVIDER_URL, MODEL
+from ..config import PROVIDER_URL, MODEL
 
 # The API key lives in a .env file one directory up — never hard-coded.
 load_dotenv(Path(__file__).parent.parent / ".env")

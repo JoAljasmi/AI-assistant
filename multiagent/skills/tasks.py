@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "tasks.db"
+from ..paths import TASKS_DB as DB_PATH
 
 # Date-only tasks (no specific time) get reminded at this hour on their due day,
 # so a dateless reminder doesn't fire at midnight.

@@ -5,3 +5,7 @@ __pycache__/
 venv/
 sessions/
 *.db*
+reminder_channel.txt*
+bot_settings.json*
+workspace/
+paths.py

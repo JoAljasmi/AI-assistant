@@ -1,6 +1,9 @@
 """Entry point for the personal assistant.
 
-Run with:  python main.py
+Run with:  
+    python -m multiagent            # terminal console (default)
+    python -m multiagent terminal   # same thing, explicit
+    python -m multiagent discord    # bring the Discord bot online
 
 Three things run at once:
   - the MAIN thread just waits for shutdown,
@@ -23,10 +26,10 @@ did before; it just learned one new trick: unrecognized lines are chat.)
 import queue
 import threading
 
-from agent import Conversation
-from budget import Budget
-from config import MAX_TOKENS_DEFAULT, MAX_REQUESTS_PER_MINUTE_DEFAULT
-from console_control import run_console
+from .core.agent import Conversation
+from .core.budget import Budget
+from .config import MAX_TOKENS_DEFAULT, MAX_REQUESTS_PER_MINUTE_DEFAULT
+from .transports.console_control import run_console
 
 
 def agent_loop(convo, chat_queue, stop_event):

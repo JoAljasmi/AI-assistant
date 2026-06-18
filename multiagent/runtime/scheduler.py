@@ -8,7 +8,7 @@ Transport-agnostic on purpose: it's handed send(channel_id, text) and
 get_channel_id() by whoever starts it (the Discord bot). It never imports
 discord, so it can be tested on its own.
 """
-import tasks
+from ..skills import tasks
 
 
 def run_scheduler(send, get_channel_id, stop_event, interval=60):

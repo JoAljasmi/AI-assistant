@@ -8,7 +8,7 @@ turn, and load it back when a Conversation for that id is created.
 import json
 from pathlib import Path
 
-SESSIONS_DIR = Path(__file__).parent / "sessions"
+from ..paths import SESSIONS_DIR
 
 
 def session_path_for(conversation_id):

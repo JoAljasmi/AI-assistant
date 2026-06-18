@@ -1,5 +1,10 @@
 """Discord transport for the assistant.
 
+Run with:  
+    python -m multiagent            # terminal console (default)
+    python -m multiagent terminal   # same thing, explicit
+    python -m multiagent discord    # bring the Discord bot online
+
 The agent is blocking (HTTP, subprocess, approval-waits), so we never run a turn
 on the asyncio event loop — each turn goes to a worker thread via
 run_in_executor, leaving the loop free to receive messages (including approval
@@ -26,12 +31,12 @@ from pathlib import Path
 import discord
 from dotenv import load_dotenv
 
-from agent import Conversation
-from budget import Budget
-from config import MAX_TOKENS_DEFAULT, MAX_REQUESTS_PER_MINUTE_DEFAULT
-from scheduler import run_scheduler
-import approval
-from settings import get_setting
+from ..config import MAX_TOKENS_DEFAULT, MAX_REQUESTS_PER_MINUTE_DEFAULT
+from ..core import approval
+from ..core.agent import Conversation
+from ..core.budget import Budget
+from ..runtime.scheduler import run_scheduler
+from ..runtime.settings import get_setting
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
@@ -47,7 +52,7 @@ _state_lock = threading.Lock()
 # Where to send reminders: the last channel the user spoke in. Persisted to disk
 # so a reminder due right after a restart still has somewhere to go (before the
 # user has said anything in the new run).
-REMINDER_CHANNEL_FILE = Path(__file__).parent / "reminder_channel.txt"
+from ..paths import REMINDER_CHANNEL_FILE
 
 
 def _load_reminder_channel():

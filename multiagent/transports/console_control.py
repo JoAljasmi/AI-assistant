@@ -12,7 +12,7 @@ line you type is routed one of three ways:
 Keeping stdin under a single owner is what lets your typing and the agent's
 approval prompts coexist without racing for the same input.
 """
-from approval import is_pending, submit_response, toggle_auto_approve, is_auto_approve
+from ..core.approval import is_pending, submit_response, toggle_auto_approve, is_auto_approve
 
 
 def run_console(budget, stop_event, chat_queue):

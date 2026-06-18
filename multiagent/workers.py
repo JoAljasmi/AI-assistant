@@ -17,7 +17,8 @@ This way one broken worker doesn't bring the whole batch down.
 
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from agent import run_agent
+
+from .core.agent import run_agent
 
 
 # Thread-local identity. Each worker sets its worker_id at the start of its

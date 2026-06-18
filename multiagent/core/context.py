@@ -28,7 +28,7 @@ Call once per iteration before the model is invoked. If no compaction is
 needed, returns (messages, False, ""). If compaction happens, returns
 (new_messages, True, "<from N msgs to M msgs, saved ~K tokens>").
 """
-from provider import chat
+from .provider import chat
 
 
 # Compaction triggers when len(messages) > MIN_BEFORE_COMPACT.
