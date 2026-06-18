@@ -9,3 +9,4 @@ reminder_channel.txt*
 bot_settings.json*
 workspace/
 paths.py
+workers.py*
