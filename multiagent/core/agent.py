@@ -141,9 +141,16 @@ class Conversation:
     conversation survives restarts.
     """
 
+    def _system_message(self):
+        """System message with the CURRENT date and time freshly stamped, so the
+        model always knows 'now' — and won't mistake a time mentioned in the
+        conversation (like a reminder's time) for the current time."""
+        now = datetime.now().strftime("%A, %Y-%m-%d %H:%M")
+        content = SYSTEM_PROMPT + f"\n\nThe current date and time right now is {now} (24-hour clock, local time)."
+        return {"role": "system", "content": content}
+
     def __init__(self, budget=None, conversation_id="default"):
-        today = datetime.now().strftime("%A, %Y-%m-%d")
-        system = SYSTEM_PROMPT + f"\n\nToday's date: {today}."
+        system = self._system_message()
         self.budget = budget
         self.ladder = ModelLadder(MODEL_LADDER)
         self.session_path = session_path_for(conversation_id)
@@ -152,18 +159,17 @@ class Conversation:
         if saved:
             self.messages = saved
             # The saved system prompt has an old date baked in — refresh it.
-            self.messages[0] = {"role": "system", "content": system}
+            self.messages[0] = system
             print(f"[agent] resumed {self.session_path.name} ({len(self.messages)} msgs)")
         else:
-            self.messages = [{"role": "system", "content": system}]
+            self.messages = [system]
             print(f"[agent] new session {self.session_path.name}")
 
     def run_turn(self, user_message, deliver):
         """Handle one user message: run the tool loop until a plain-text reply,
         deliver it, and leave the history intact for next time."""
         self.messages.append({"role": "user", "content": user_message})
-        today = datetime.now().strftime("%A, %Y-%m-%d")
-        self.messages[0] = {"role": "system", "content": SYSTEM_PROMPT + f"\n\nToday's date: {today}."}
+        self.messages[0] = self._system_message()
         self.ladder.reset()           # every turn starts on the cheapest model
         consecutive_errors = 0
         
