@@ -1,10 +1,5 @@
 """Discord transport for the assistant.
 
-Run with:  
-    python -m multiagent            # terminal console (default)
-    python -m multiagent terminal   # same thing, explicit
-    python -m multiagent discord    # bring the Discord bot online
-
 The agent is blocking (HTTP, subprocess, approval-waits), so we never run a turn
 on the asyncio event loop — each turn goes to a worker thread via
 run_in_executor, leaving the loop free to receive messages (including approval
@@ -157,6 +152,7 @@ async def on_ready():
 
 @client.event
 async def on_message(message):
+    global reminder_channel_id
     if message.author == client.user:
         return
 
@@ -174,12 +170,7 @@ async def on_message(message):
     if not content:
         return
         
-    global reminder_channel_id
-    if message.author == client.user:
-        return
-    content = message.content.strip()
-    if not content:
-        return
+    author = message.author.display_name      # who is speaking
 
     channel_id = message.channel.id
 
@@ -207,7 +198,7 @@ async def on_message(message):
     # 3. New task -> worker thread, so the loop stays free for approvals.
     def work():
         try:
-            _run_turn_blocking(message.channel, content, loop)
+            _run_turn_blocking(message.channel, f"{author}: {content}", loop)
         except RuntimeError as e:
             asyncio.run_coroutine_threadsafe(
                 message.channel.send(f"[halted: {e}]"), loop
