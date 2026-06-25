@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 
 from ..config import MAX_TOKENS_DEFAULT, MAX_REQUESTS_PER_MINUTE_DEFAULT
 from ..core import approval
+from ..core import filesend
 from ..core.agent import Conversation
 from ..core.budget import Budget
 from ..runtime.scheduler import run_scheduler
@@ -122,7 +123,13 @@ def _run_turn_blocking(channel, content, loop, image_urls=None):
             pending_answers.pop(channel_id, None)
         return answer
 
+    def send_file_fn(host_path, caption=None):
+        asyncio.run_coroutine_threadsafe(
+            channel.send(content=caption or None, file=discord.File(host_path)), loop
+        ).result()
+
     approval.bind_approval_io(prompt, wait)
+    filesend.bind_file_sender(send_file_fn)
     convo = _get_conversation(channel_id)
     convo.run_turn(content, deliver=send, image_urls=image_urls)
 

@@ -20,6 +20,7 @@ from datetime import datetime
 
 from ..config import SYSTEM_PROMPT, MAX_ITERATIONS, TOOLS, MODEL_LADDER
 from ..runtime.settings import set_mention_mode
+from .filesend import send_file
 from ..runtime.sessions import session_path_for, load_session, save_session
 from ..safety.sandbox import run_bash, edit_file
 from ..skills.notes import save_note, search_notes, delete_note
@@ -29,6 +30,7 @@ from ..skills.web_read import read_url
 from ..skills.web_search import web_search
 from .context import maybe_compact
 from .provider import chat, ModelLadder
+from ..skills.image_search import image_search
 
 
 VERBOSE = os.environ.get("VERBOSE", "").lower() in ("1", "true", "yes")
@@ -120,6 +122,10 @@ def execute_tool_call(tool_call, budget=None, ladder=None):
         return weather(args.get("location"))
     if name == "set_mention_mode":
         return set_mention_mode(args.get("enabled"))
+    if name == "send_file":
+        return send_file(args.get("path"), args.get("caption"))
+    if name == "image_search":
+        return image_search(args.get("query"), args.get("max_results", 3))
 
     if name == "escalate":
         # The model judged this task too hard for the current model. Climb.

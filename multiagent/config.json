@@ -1,180 +1,347 @@
 {
   "provider": {
-  "url": "https://openrouter.ai/api/v1/chat/completions",
-  "model": "anthropic/claude-haiku-4.5",
-  "model_ladder": [
-    "anthropic/claude-haiku-4.5",
-    "anthropic/claude-sonnet-4.6",
-    "anthropic/claude-opus-4.8"
-  ]
-},
-"agent": {
-  "max_iterations": 20,
-  "max_tokens_default": 500000,
-  "max_requests_per_minute_default": 60
-},
-"sandbox": {  
-  "container_name": "agent-sandbox",
-  "timeout_seconds": 30,
-  "max_output_chars": 4000
-},
-
-"tools": [
-  {
+    "url": "https://openrouter.ai/api/v1/chat/completions",
+    "model": "anthropic/claude-haiku-4.5",
+    "model_ladder": [
+      "anthropic/claude-haiku-4.5",
+      "anthropic/claude-sonnet-4.6",
+      "anthropic/claude-opus-4.8"
+    ]
+  },
+  "agent": {
+    "max_iterations": 20,
+    "max_tokens_default": 500000,
+    "max_requests_per_minute_default": 60
+  },
+  "sandbox": {
+    "container_name": "agent-sandbox",
+    "timeout_seconds": 30,
+    "max_output_chars": 4000
+  },
+  "tools": [
+    {
       "type": "function",
       "function": {
-          "name": "bash",
-          "description": "Run a shell command inside the sandboxed Docker container.",
-          "parameters": {
-              "type": "object",
-              "properties": {
-                  "command": {
-                      "type": "string",
-                      "description": "The shell command to execute."
-                  }
-              },
-              "required": ["command"]
-          }
-      }
-  },
-  {
-        "type": "function",
-        "function": {
-          "name": "edit_file",
-          "description": "Edit a file inside the sandboxed container by replacing exactly one occurrence of old_text with new_text. The file must already exist and the path must be under /workspace.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "path": {
-                "type": "string",
-                "description": "Absolute path to the file inside the container, must start with /workspace/"
-              },
-              "old_text": {
-                "type": "string",
-                "description": "The exact text to find. Must appear exactly once in the file."
-              },
-              "new_text": {
-                "type": "string",
-                "description": "The text to replace it with."
-              }
-            },
-            "required": ["path", "old_text", "new_text"]
-          }
+        "name": "bash",
+        "description": "Run a shell command inside the sandboxed Docker container.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "The shell command to execute."
+            }
+          },
+          "required": [
+            "command"
+          ]
         }
-  },
-  {
-        "type": "function",
-        "function": {
-          "name": "spawn_workers",
-          "description": "Run several sub-agents in parallel, each with its own isolated context, to work on independent sub-tasks at the same time. Use this when you have multiple pieces of work that do not depend on each other (e.g. writing tests for several files, exploring different parts of a codebase). Each worker runs the same agent loop and shares the global token budget. Returns a list of result objects with worker_id, task, result text, and error (if any). Do not use this for sequential work or for a single task — call bash or edit_file directly instead.",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "tasks": {
-                "type": "array",
-                "items": { "type": "string" },
-                "description": "List of independent task descriptions, one per sub-agent. Each task should be a complete, self-contained instruction the worker can act on without seeing the others."
-              }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "edit_file",
+        "description": "Edit a file inside the sandboxed container by replacing exactly one occurrence of old_text with new_text. The file must already exist and the path must be under /workspace.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Absolute path to the file inside the container, must start with /workspace/"
             },
-            "required": ["tasks"]
-          }
+            "old_text": {
+              "type": "string",
+              "description": "The exact text to find. Must appear exactly once in the file."
+            },
+            "new_text": {
+              "type": "string",
+              "description": "The text to replace it with."
+            }
+          },
+          "required": [
+            "path",
+            "old_text",
+            "new_text"
+          ]
         }
-  },
-
-  {
-    "type": "function",
-    "function": {
-      "name": "add_task",
-      "description": "Add a task or deadline to the user's list. Use whenever they want to remember to do something or mention a deadline.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "description": {"type": "string", "description": "What the task is, in a few words."},
-          "due_date": {"type": "string", "description": "Optional deadline as YYYY-MM-DD. Convert any natural-language date ('friday', 'tomorrow') to this format yourself using today's date. Omit if there's no deadline."},
-          "due_time": {"type": "string", "description": "Optional time of day as HH:MM (24-hour). Convert e.g. '7pm' to '19:00', '8:30am' to '08:30'. Omit if no specific time."}
-        },
-        "required": ["description"]
       }
-    }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "list_tasks",
-      "description": "List the user's tasks. Use for questions like 'what's due this week' or 'what do I need to do'. Returns each task's id, text, and due date.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "status": {"type": "string", "enum": ["pending", "done", "all"], "description": "Which tasks to show. Defaults to pending."}
-        },
-        "required": []
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "add_task",
+        "description": "Add a task or deadline to the user's list. Use whenever they want to remember to do something or mention a deadline.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "description": {
+              "type": "string",
+              "description": "What the task is, in a few words."
+            },
+            "due_date": {
+              "type": "string",
+              "description": "Optional deadline as YYYY-MM-DD. Convert any natural-language date ('friday', 'tomorrow') to this format yourself using today's date. Omit if there's no deadline."
+            },
+            "due_time": {
+              "type": "string",
+              "description": "Optional time of day as HH:MM (24-hour). Convert e.g. '7pm' to '19:00', '8:30am' to '08:30'. Omit if no specific time."
+            }
+          },
+          "required": [
+            "description"
+          ]
+        }
       }
-    }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "complete_task",
-      "description": "Mark a task done by its id. If you don't know the id, call list_tasks first.",
-      "parameters": {
-        "type": "object",
-        "properties": {"task_id": {"type": "integer", "description": "The id of the task to complete."}},
-        "required": ["task_id"]
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_tasks",
+        "description": "List the user's tasks. Use for questions like 'what's due this week' or 'what do I need to do'. Returns each task's id, text, and due date.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "done",
+                "all"
+              ],
+              "description": "Which tasks to show. Defaults to pending."
+            }
+          },
+          "required": []
+        }
       }
-    }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "delete_task",
-      "description": "Delete a task by id. Prefer complete_task for finished work; delete only removes something added by mistake.",
-      "parameters": {
-        "type": "object",
-        "properties": {"task_id": {"type": "integer", "description": "The id of the task to delete."}},
-        "required": ["task_id"]
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "complete_task",
+        "description": "Mark a task done by its id. If you don't know the id, call list_tasks first.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "integer",
+              "description": "The id of the task to complete."
+            }
+          },
+          "required": [
+            "task_id"
+          ]
+        }
       }
-    }
-  },
-  {
-    "type": "function",
-    "function": {
-      "name": "escalate",
-      "description": "Switch yourself to a more capable (and more expensive) model for the rest of this task. Use ONLY when you've genuinely hit something too hard — a bug you keep getting wrong, reasoning you can't complete. Never for routine work.",
-      "parameters": {"type": "object", "properties": {}, "required": []}
-    }
-  },
-  
-  { "type": "function", "function": {
-    "name": "save_note",
-    "description": "Save a freeform note — any fact the user wants remembered that isn't a dated task (preferences, passwords, where they left something, ideas).",
-    "parameters": {"type": "object", "properties": {"content": {"type": "string", "description": "The note text."}}, "required": ["content"]} } },
-  { "type": "function", "function": {
-      "name": "search_notes",
-      "description": "Search saved notes by keyword, or list all if no query. Use this to recall something the user mentioned earlier.",
-      "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "Keyword to search. Omit to list everything."}}, "required": []} } },
-  { "type": "function", "function": {
-      "name": "delete_note",
-      "description": "Delete a saved note by its id.",
-      "parameters": {"type": "object", "properties": {"note_id": {"type": "integer", "description": "The id of the note to delete."}}, "required": ["note_id"]} } 
-  },
-
-  { "type": "function", "function": {
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "delete_task",
+        "description": "Delete a task by id. Prefer complete_task for finished work; delete only removes something added by mistake.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "integer",
+              "description": "The id of the task to delete."
+            }
+          },
+          "required": [
+            "task_id"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "escalate",
+        "description": "Switch yourself to a more capable (and more expensive) model for the rest of this task. Use ONLY when you've genuinely hit something too hard \u2014 a bug you keep getting wrong, reasoning you can't complete. Never for routine work.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "save_note",
+        "description": "Save a freeform note \u2014 any fact the user wants remembered that isn't a dated task (preferences, passwords, where they left something, ideas).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "content": {
+              "type": "string",
+              "description": "The note text."
+            }
+          },
+          "required": [
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_notes",
+        "description": "Search saved notes by keyword, or list all if no query. Use this to recall something the user mentioned earlier.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keyword to search. Omit to list everything."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "delete_note",
+        "description": "Delete a saved note by its id.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "note_id": {
+              "type": "integer",
+              "description": "The id of the note to delete."
+            }
+          },
+          "required": [
+            "note_id"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
         "name": "web_search",
-        "description": "Search the web for current or factual info you might not know. Returns titles, URLs, and snippets — use read_url to read a result in full.",
-        "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "max_results": {"type": "integer", "description": "1-10, default 5."}}, "required": ["query"]} } },
-  { "type": "function", "function": {
+        "description": "Search the web for current or factual info you might not know. Returns titles, URLs, and snippets \u2014 use read_url to read a result in full.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string"
+            },
+            "max_results": {
+              "type": "integer",
+              "description": "1-10, default 5."
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
         "name": "read_url",
         "description": "Fetch a web page and return its readable text. Use after web_search, or when the user shares a link.",
-        "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]} } },
-  { "type": "function", "function": {
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "url"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
         "name": "weather",
         "description": "Current weather and today's temperature range for a city or place name.",
-        "parameters": {"type": "object", "properties": {"location": {"type": "string"}}, "required": ["location"]} } 
-  },
-  { "type": "function", "function": {
-    "name": "set_mention_mode",
-    "description": "Turn mention-only mode on or off for server channels. When ON, you only reply in a server when the user @-mentions you; when OFF, you reply to every message (DMs always get a reply either way). Call this when the user asks you to only respond to @mentions, or to respond to everything.",
-    "parameters": {"type": "object", "properties": {"enabled": {"type": "boolean", "description": "true = only reply to @mentions; false = reply to everything."}}, "required": ["enabled"]} } 
-  }
-]
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "location"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "set_mention_mode",
+        "description": "Turn mention-only mode on or off for server channels. When ON, you only reply in a server when the user @-mentions you; when OFF, you reply to every message (DMs always get a reply either way). Call this when the user asks you to only respond to @mentions, or to respond to everything.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "true = only reply to @mentions; false = reply to everything."
+            }
+          },
+          "required": [
+            "enabled"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "image_search",
+        "description": "Search for actual images (pictures), not web pages. Returns direct image URLs. Use this when the user wants to see a picture of something. To deliver it reliably, download the image into /workspace and send_file it, rather than just pasting the URL.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string"
+            },
+            "max_results": {
+              "type": "integer",
+              "description": "1-10, default 3."
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "send_file",
+        "description": "Send a file from the workspace to the user as a Discord attachment. Use it to deliver a game's .html so they can download it, or to send an image saved in the workspace. Images preview inline; other files download. Pass the path you saved to, e.g. /workspace/snake.html.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Path to the file, e.g. /workspace/snake.html"
+            },
+            "caption": {
+              "type": "string",
+              "description": "Optional message to send with the file."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    }
+  ]
 }
