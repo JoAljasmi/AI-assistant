@@ -94,7 +94,7 @@ async def _send_to_channel(channel_id, text):
         await channel.send(text[i:i + 1900])
 
 
-def _run_turn_blocking(channel, content, loop):
+def _run_turn_blocking(channel, content, loop, image_urls=None):
     """Runs on a WORKER thread: bind Discord approval I/O, run one turn."""
     channel_id = channel.id
 
@@ -124,7 +124,7 @@ def _run_turn_blocking(channel, content, loop):
 
     approval.bind_approval_io(prompt, wait)
     convo = _get_conversation(channel_id)
-    convo.run_turn(content, deliver=send)
+    convo.run_turn(content, deliver=send, image_urls=image_urls)
 
 
 @client.event
@@ -167,7 +167,13 @@ async def on_message(message):
     for tag in (f"<@{client.user.id}>", f"<@!{client.user.id}>"):
         content = content.replace(tag, "")
     content = content.strip()
-    if not content:
+
+    # Pull any image attachments — the model can look at these.
+    image_urls = [
+        a.url for a in message.attachments
+        if (a.content_type or "").startswith("image/")
+    ]
+    if not content and not image_urls:
         return
         
     author = message.author.display_name      # who is speaking
@@ -198,7 +204,8 @@ async def on_message(message):
     # 3. New task -> worker thread, so the loop stays free for approvals.
     def work():
         try:
-            _run_turn_blocking(message.channel, f"{author}: {content}", loop)
+            turn_text = f"{author}: {content}" if content else f"{author} sent an image."
+            _run_turn_blocking(message.channel, turn_text, loop, image_urls)
         except RuntimeError as e:
             asyncio.run_coroutine_threadsafe(
                 message.channel.send(f"[halted: {e}]"), loop

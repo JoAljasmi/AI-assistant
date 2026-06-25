@@ -165,10 +165,21 @@ class Conversation:
             self.messages = [system]
             print(f"[agent] new session {self.session_path.name}")
 
-    def run_turn(self, user_message, deliver):
+    def _user_message(self, text, image_urls=None):
+        """Build a user message. With images, content becomes a list of blocks
+        (OpenAI/OpenRouter multimodal format) so a vision model can see them;
+        with none, it stays a plain string exactly like before."""
+        if not image_urls:
+            return {"role": "user", "content": text}
+        content = [{"type": "text", "text": text}] if text else []
+        for url in image_urls:
+            content.append({"type": "image_url", "image_url": {"url": url}})
+        return {"role": "user", "content": content}
+
+    def run_turn(self, user_message, deliver, image_urls=None):
         """Handle one user message: run the tool loop until a plain-text reply,
         deliver it, and leave the history intact for next time."""
-        self.messages.append({"role": "user", "content": user_message})
+        self.messages.append(self._user_message(user_message, image_urls))
         self.messages[0] = self._system_message()
         self.ladder.reset()           # every turn starts on the cheapest model
         consecutive_errors = 0
