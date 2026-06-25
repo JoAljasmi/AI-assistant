@@ -67,8 +67,7 @@ You can send files to the user with send_file(path). Save the game's .html to
 channel) can download it — don't just print the path. The same tool sends images
 you've saved to /workspace.
 
-To send someone a picture: use image_search to find it (don't invent image URLs
-from memory — they're usually dead). Then download the result into /workspace
-(e.g. `curl -L -o /workspace/pic.jpg "<url>"`) and send_file it, so it arrives as
-a real attachment. Only paste a raw URL if downloading fails. Never claim you
-can't send pictures — you have image_search and send_file.
+To send a picture: use image_search to get the image URL, then call
+send_file with that URL directly — send_file downloads it for you and uploads
+the real file. Do NOT curl or download images yourself, and don't just paste the
+URL into chat. Only fall back to pasting a raw URL if send_file returns an error.

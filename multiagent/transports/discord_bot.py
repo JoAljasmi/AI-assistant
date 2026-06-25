@@ -185,6 +185,31 @@ async def on_message(message):
         
     author = message.author.display_name      # who is speaking
 
+    # --- your control commands (you, not the model): approvals + budget ---
+    low = content.lower()
+    if low in ("!auto", "!auto on", "!auto off", "!auto status", "!status"):
+        from ..core.approval import is_auto_approve, toggle_auto_approve
+        if low == "!status":
+            state = "ON" if is_auto_approve() else "OFF"
+            await message.channel.send(f"Budget: {budget.snapshot()} | auto-approve: {state}")
+            return
+        if low == "!auto status":
+            state = "ON" if is_auto_approve() else "OFF"
+        elif low == "!auto on":
+            if not is_auto_approve():
+                toggle_auto_approve()
+            state = "ON"
+        elif low == "!auto off":
+            if is_auto_approve():
+                toggle_auto_approve()
+            state = "OFF"
+        else:  # bare "!auto" toggles
+            state = "ON" if toggle_auto_approve() else "OFF"
+        note = (" Writes and commands run without asking — the danger filter still blocks the worst."
+                if state == "ON" else " I'll ask before writes and commands again.")
+        await message.channel.send(f"Auto-approve {state}.{note}")
+        return
+
     channel_id = message.channel.id
 
     # Remember this channel for reminders (and persist if it changed).
